@@ -50,7 +50,7 @@ public final class SymcBootstrap {
         this.cooperation = new SymcCooperationRequest(regionId, scheduler, nats);
         this.anticheat = new SymcAntiCheatHook(regionId, scheduler);
 
-        Runtime.getRuntime().addShutdownHook(new Thread(this::stop, "symc-shutdown"));
+        Runtime.getRuntime().addShutdownHook(new Thread(SymcBootstrap::stop, "symc-shutdown"));
         LOG.info("[symc] runtime started region={} threads=4 nats={}", regionId, natsUrl);
     }
 

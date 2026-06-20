@@ -79,8 +79,7 @@ public final class SymcCooperationRequest implements Listener {
     public void publish(@NotNull CooperationRequest request) {
         pending.put(request.eventId(), new PendingRequest(request, System.currentTimeMillis()));
         try {
-            byte[] payload = toJson(request);
-            nats.publish(subjectName(), payload);
+            nats.publish(subjectName(), toJson(request));
             LOG.fine("[symc] published " + request.eventId()
                     + " type=" + request.type() + " subject=" + subjectName());
         } catch (Exception e) {
@@ -114,17 +113,15 @@ public final class SymcCooperationRequest implements Listener {
     public String subjectName() {
         return "symc.cooperation." + regionId;
     }
-
-    // ---- 序列化(简化 JSON,手写不用 jackson 减少 dep) ----
-
-    static String toJson(CooperationRequest r) {
-        return "{\"type\":\"" + r.type() + "\","
+    static byte[] toJson(CooperationRequest r) {
+        String s = "{\"type\":\"" + r.type() + "\","
                 + "\"x\":" + r.x() + ","
                 + "\"y\":" + r.y() + ","
                 + "\"z\":" + r.z() + ","
                 + "\"event\":\"" + r.eventName() + "\","
                 + "\"payload\":\"" + r.payload() + "\","
                 + "\"ts\":" + r.timestamp() + "}";
+        return s.getBytes(StandardCharsets.UTF_8);
     }
 
     static CooperationRequest fromJson(String s) {
