@@ -157,6 +157,7 @@ dependencies {
     // Spark
     implementation("me.lucko:spark-api:0.1-20240720.200737-2")
     implementation("me.lucko:spark-paper:1.10.152")
+    implementation("io.nats:jnats:2.17.0")  // M7: symc real network sync
 }
 
 tasks.jar {

@@ -1,64 +1,64 @@
 package io.papermc.paper.symc;
 
+import io.nats.client.Connection;
+import io.nats.client.Nats;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Logger;
 
 /**
- * Symc 运行时主入口 — 自建多线程实例,跟 Paper EventBus 解耦后跑。
+ * Symc 运行时主入口 — 自建多线程实例 + M7 真实网络 sync(NATS client)。
  *
- * <p>每个 region pod 起一个 SymcBootstrap 实例:
+ * <p>每个 region pod 起一个 SymcBootstrap:
  * <pre>
- *   Paper startup
+ *   SymcBootstrap.start("region-1", "nats://nats-server:4222")
  *     ↓
- *   SymcBootstrap.start(regionId)
- *     ↓
- *   ScheduledExecutorService (4 daemon threads, "symc-worker-N")
- *     ↓
- *   3 个 symc component 共享线程池,各自独立 queue
- *     ↓
- *   Bukkit @EventHandler 收到后 submit() 异步处理(不阻塞主 tick)
+ *   - ScheduledExecutorService(4 daemon threads, "symc-worker-region-1")
+ *   - io.nats.client.Connection(NATS pub/sub)
+ *   - 3 个 symc component 共享两者
  * </pre>
  *
- * <p>设计:
- * <ul>
- *   <li>单例(每个 region pod 一份),线程池 daemon 化,Paper 关闭时不阻塞</li>
- *   <li>4 线程:WriteAuthority / Cooperation / AntiCheat / scheduled-tasks</li>
- *   <li>Bukkit @EventHandler 保留(钩入点不变),但处理逻辑全异步</li>
- *   <li>支持热重启:stop() 后再 start() 重建</li>
- * </ul>
+ * <p>NATS 关闭顺序: stop() → executor shutdown + nats connection close
  */
 public final class SymcBootstrap {
-    private static final Logger LOG = Logger.getLogger(SymcBootstrap.class.getName());
+    private static final org.slf4j.Logger LOG = LoggerFactory.getLogger(SymcBootstrap.class);
+
     private static volatile SymcBootstrap INSTANCE;
 
-    /** 4 线程池:WriteAuthority / Cooperation / AntiCheat / scheduled tasks */
     private final ScheduledExecutorService scheduler;
-
+    private final Connection nats;
     private final SymcWriteAuthorityManager writeAuthority;
     private final SymcCooperationRequest cooperation;
     private final SymcAntiCheatHook anticheat;
     private final String regionId;
 
-    private SymcBootstrap(String regionId) {
+    private SymcBootstrap(String regionId, String natsUrl) throws Exception {
         this.regionId = regionId;
         this.scheduler = Executors.newScheduledThreadPool(4, r -> {
             Thread t = new Thread(r, "symc-worker-" + regionId);
-            t.setDaemon(true); // Paper 关闭时不阻塞 JVM 退出
+            t.setDaemon(true);
             return t;
         });
+        // NATS connection(同步连,超时 5s)
+        this.nats = Nats.connect(natsUrl);
+        LOG.info("[symc] NATS connected: {}", natsUrl);
+
         this.writeAuthority = new SymcWriteAuthorityManager(regionId, scheduler);
-        this.cooperation = new SymcCooperationRequest(regionId, scheduler);
+        this.cooperation = new SymcCooperationRequest(regionId, scheduler, nats);
         this.anticheat = new SymcAntiCheatHook(regionId, scheduler);
-        LOG.info("[symc] runtime started region=" + regionId + " threads=4");
+
+        Runtime.getRuntime().addShutdownHook(new Thread(this::stop, "symc-shutdown"));
+        LOG.info("[symc] runtime started region={} threads=4 nats={}", regionId, natsUrl);
     }
 
-    public static SymcBootstrap start(String regionId) {
+    public static SymcBootstrap start(String regionId, String natsUrl) throws Exception {
         if (INSTANCE != null) {
             throw new IllegalStateException("[symc] already started, call stop() first");
         }
-        INSTANCE = new SymcBootstrap(regionId);
+        INSTANCE = new SymcBootstrap(regionId, natsUrl);
         return INSTANCE;
     }
 
@@ -68,31 +68,33 @@ public final class SymcBootstrap {
             old.scheduler.shutdownNow();
             try {
                 if (!old.scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                    LOG.warning("[symc] scheduler did not terminate in 5s");
+                    LOG.warn("[symc] scheduler did not terminate in 5s");
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+            try {
+                old.nats.close();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             INSTANCE = null;
-            LOG.info("[symc] runtime stopped region=" + old.regionId);
+            LOG.info("[symc] runtime stopped region={}", old.regionId);
         }
     }
 
     public static SymcBootstrap get() {
         SymcBootstrap b = INSTANCE;
-        if (b == null) {
-            throw new IllegalStateException("[symc] not started, call start() first");
-        }
+        if (b == null) throw new IllegalStateException("[symc] not started, call start() first");
         return b;
     }
 
-    public static boolean isRunning() {
-        return INSTANCE != null;
-    }
+    public static boolean isRunning() { return INSTANCE != null; }
 
     public SymcWriteAuthorityManager writeAuthority() { return writeAuthority; }
     public SymcCooperationRequest cooperation() { return cooperation; }
     public SymcAntiCheatHook anticheat() { return anticheat; }
     public ScheduledExecutorService scheduler() { return scheduler; }
+    public Connection nats() { return nats; }
     public String regionId() { return regionId; }
 }
