@@ -1,0 +1,8 @@
+name: symc
+version: 0.1.0
+main: io.papermc.paper.symc.SymcPlugin
+api-version: "1.26"
+authors:
+  - SteavenJiang
+description: Distributed MC sync engine — write authority drift, cross-region cooperation, anti-cheat
+load: POSTWORLD
