@@ -332,3 +332,16 @@ fill {
         }
     }
 }
+// M8: symc plugin jar packaging(独立 jar 给 paperclip 加载)
+tasks.register("symcPluginJar", Jar::class.java) {
+    dependsOn("compileJava", "processResources")
+    archiveBaseName = "symc-plugin"
+    archiveVersion = "0.1.0"
+    from("build/classes/java/main") {
+        include("dev/symc/paper/**")
+    }
+    from("src/main/resources") {
+        include("paper-plugin.yml")
+    }
+    destinationDirectory = file("$rootDir/plugins")
+}

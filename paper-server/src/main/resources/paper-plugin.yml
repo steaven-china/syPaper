@@ -1,6 +1,6 @@
 name: symc
 version: 0.1.0
-main: io.papermc.paper.symc.SymcPlugin
+main: dev.symc.paper.SymcPlugin
 api-version: "1.26"
 authors:
   - SteavenJiang

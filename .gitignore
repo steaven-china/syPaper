@@ -47,6 +47,26 @@ logs/
 
 test-plugin.settings.gradle.kts
 paper-generator.settings.gradle.kts
-
 # Don't track patched vanilla submodules
 paper-server/src/minecraft/
+
+# M8 runtime files (Paper server运行时产物,不入 git)
+world*/
+plugins/
+eula.txt
+server.properties
+config.yml
+permissions.yml
+ops.json
+whitelist.json
+usercache.json
+banned-ips.json
+banned-players.json
+version_history.json
+bukkit.yml
+commands.yml
+help.yml
+spigot.yml
+config/
+caches/
+versions/
