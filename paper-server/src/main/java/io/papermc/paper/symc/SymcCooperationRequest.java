@@ -9,14 +9,13 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.logging.Logger;
 
 /**
  * D-extra §5.1.1 跨区协作请求协议。
  *
- * <p>当红石/水流/实体跨越 region 边界时,CompositeEvent 被包装为
- * CooperationRequest,通过高速服务(NATS/Redis)通告邻居 region。
- * 接收方判断是否参与、升级为主 region 权威、或拒绝。
+ * <p>由 {@link SymcBootstrap} 构造,接收调度线程池。@EventHandler 异步处理。
  *
  * <p><b>三种请求类型</b>:
  * <ul>
@@ -28,30 +27,41 @@ import java.util.logging.Logger;
 public final class SymcCooperationRequest implements Listener {
 
     private static final Logger LOG = Logger.getLogger(SymcCooperationRequest.class.getName());
+
     private final Map<UUID, PendingRequest> pending = new ConcurrentHashMap<>();
     private final String regionId;
+    private final ScheduledExecutorService scheduler;
 
-    public SymcCooperationRequest(@NotNull String regionId) {
+    public SymcCooperationRequest(@NotNull String regionId,
+                                   @NotNull ScheduledExecutorService scheduler) {
         this.regionId = regionId;
+        this.scheduler = scheduler;
         LOG.info("[symc] CooperationRequest handler started for region=" + regionId);
     }
 
     @EventHandler
     public void onRedstone(@NotNull BlockRedstoneEvent event) {
-        Block block = event.getBlock();
-        int oldLevel = event.getOldCurrent();
-        int newLevel = event.getNewCurrent();
+        // 主线程接 event → submit 异步处理
+        final Block block = event.getBlock();
+        final int oldLevel = event.getOldCurrent();
+        final int newLevel = event.getNewCurrent();
+        final int x = block.getX(), y = block.getY(), z = block.getZ();
 
-        // 跨区红石检测:信号变化且强度跨过阈值 → 可能影响邻居 region
-        if (Math.abs(newLevel - oldLevel) >= 8 && isBoundaryBlock(block)) {
-            CooperationRequest req = new CooperationRequest(
-                    RequestType.COMPUTATION,
-                    block.getX(), block.getY(), block.getZ(),
-                    "redstone_pulse", "level_change=" + oldLevel + "→" + newLevel,
-                    0
-            );
-            submit(req);
-        }
+        scheduler.submit(() -> handleRedstoneAsync(x, y, z, oldLevel, newLevel));
+    }
+
+    private void handleRedstoneAsync(int x, int y, int z, int oldLevel, int newLevel) {
+        if (Math.abs(newLevel - oldLevel) < 8) return;
+
+        // TODO M7: 用 chunk→region 映射表,判断是否真的在边界
+        // 当前 stub:直接发
+        CooperationRequest req = new CooperationRequest(
+                RequestType.COMPUTATION,
+                x, y, z,
+                "redstone_pulse", "level_change=" + oldLevel + "→" + newLevel,
+                System.currentTimeMillis()
+        );
+        submit(req);
     }
 
     public void submit(@NotNull CooperationRequest request) {
@@ -66,11 +76,6 @@ public final class SymcCooperationRequest implements Listener {
     }
 
     public int pendingCount() { return pending.size(); }
-
-    private boolean isBoundaryBlock(Block block) {
-        // TODO M7: 读 chunk→region 映射表,判断 block 是否在边界 2 chunk 内(缓冲带)
-        return false; // stub — 当前先返回 false
-    }
 
     // ---- 数据类 ----
 

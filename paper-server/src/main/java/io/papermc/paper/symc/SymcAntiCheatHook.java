@@ -9,10 +9,13 @@ import org.jetbrains.annotations.NotNull;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.logging.Logger;
 
 /**
  * D4 反作弊基线 — 主 region 权威 + 邻居抽查 + 架构层信号时序检测。
+ *
+ * <p>由 {@link SymcBootstrap} 构造,接收调度线程池。@EventHandler 异步处理。
  *
  * <p>每个 CompositeEvent 带三个字段:
  * <ul>
@@ -20,9 +23,6 @@ import java.util.logging.Logger;
  *   <li>{@code OriginTick} — 哪个 tick 发的</li>
  *   <li>{@code CausalityHash} — 已知状态下"能不能发生"的指纹</li>
  * </ul>
- *
- * <p>接收 region 校验:事件在已知状态下能不能发生?
- * 不能 → 触发 {@code AntiCheatAnomalyEvent} → 插件决定 ban 不 ban。
  */
 public final class SymcAntiCheatHook implements Listener {
 
@@ -38,28 +38,35 @@ public final class SymcAntiCheatHook implements Listener {
     }
 
     private final String regionId;
+    private final ScheduledExecutorService scheduler;
 
-    public SymcAntiCheatHook(@NotNull String regionId) {
+    public SymcAntiCheatHook(@NotNull String regionId,
+                             @NotNull ScheduledExecutorService scheduler) {
         this.regionId = regionId;
+        this.scheduler = scheduler;
         LOG.info("[symc] AntiCheatHook started for region=" + regionId);
     }
 
     @EventHandler
     public void onPlayerMove(@NotNull PlayerMoveEvent event) {
-        Player player = event.getPlayer();
-        Location from = event.getFrom();
-        Location to = event.getTo();
+        final Player player = event.getPlayer();
+        final Location from = event.getFrom();
+        final Location to = event.getTo();
         if (to == null) return;
 
-        // 8 格以上移动 → 校验时序异常
-        double dist = from.distance(to);
-        if (dist >= 8.0) {
-            byte[] hash = causalityHash(player.getName(), from, to);
-            if (!validateCausality(hash, player)) {
-                // TODO M7: 触发 AntiCheatAnomalyEvent → 插件订阅
-                LOG.warning("[symc] ANTI-CHEAT anomaly: player=" + player.getName() +
-                        " moved " + String.format("%.1f", dist) + " blocks in one tick");
-            }
+        final double dist = from.distance(to);
+        if (dist < 8.0) return;
+
+        // submit 异步处理(主 tick 线程不阻塞)
+        scheduler.submit(() -> handlePlayerMoveAsync(player.getName(), from, to, dist));
+    }
+
+    private void handlePlayerMoveAsync(String playerName, Location from, Location to, double dist) {
+        byte[] hash = causalityHash(playerName, from, to);
+        if (!validateCausality(hash, playerName)) {
+            // TODO M7: 触发 AntiCheatAnomalyEvent → 插件订阅
+            LOG.warning("[symc] ANTI-CHEAT anomaly: player=" + playerName +
+                    " moved " + String.format("%.1f", dist) + " blocks in one tick");
         }
     }
 
@@ -75,7 +82,7 @@ public final class SymcAntiCheatHook implements Listener {
         return SHA256.digest();
     }
 
-    boolean validateCausality(byte[] hash, @NotNull Player player) {
+    boolean validateCausality(byte[] hash, @NotNull String player) {
         // TODO M7: 向邻居 region 查询:player 在 OriginTick 的状态能不能产生这个移动?
         // 当前 stub:始终返回 true
         return true;
